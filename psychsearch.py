@@ -55,7 +55,7 @@ st.markdown("""
         font-size: 13px;
     }
 </style>
-""", unsafe_unsafe_html=True)
+""", unsafe_allow_html=True)
 
 # 常见心理学/咨询/社工中英专业词汇自动映射字典（可自由扩充）
 DICT_MAPPING = {
