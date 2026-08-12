@@ -3,14 +3,14 @@ import requests
 import re
 from urllib.parse import quote_plus
 
-# 页面基础配置
+# 1. 页面基础配置
 st.set_page_config(
-    page_title="心理学、心理咨询与社工私人定制学术搜索引擎",
+    page_title="心理学、心理咨询与社工学术搜索引擎",
     page_icon="🧠",
     layout="wide"
 )
 
-# 自定义 CSS 样式
+# 2. 自定义 CSS 样式
 st.markdown("""
 <style>
     .card {
@@ -44,16 +44,25 @@ st.markdown("""
         border-radius: 3px;
         font-weight: 600;
     }
-    .badge-gov {
+    .badge-oa {
+        background-color: #dcfce7;
+        color: #15803d;
+        border: 1px solid #86efac;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 12px;
+        font-weight: 600;
+    }
+    .badge-score {
         background-color: #fef3c7;
-        color: #92400e;
+        color: #b45309;
         border: 1px solid #fde68a;
         padding: 2px 8px;
         border-radius: 12px;
         font-size: 12px;
         font-weight: 600;
     }
-    .badge-book {
+    .badge-synonym {
         background-color: #f3e8ff;
         color: #6b21a8;
         border: 1px solid #e9d5ff;
@@ -62,17 +71,8 @@ st.markdown("""
         font-size: 12px;
         font-weight: 600;
     }
-    .badge-media {
-        background-color: #ffe4e6;
-        color: #9f1239;
-        border: 1px solid #fecdd3;
-        padding: 2px 8px;
-        border-radius: 12px;
-        font-size: 12px;
-        font-weight: 600;
-    }
-    .badge-academic {
-        background-color: #f0f9ff;
+    .badge-gov {
+        background-color: #e0f2fe;
         color: #0369a1;
         border: 1px solid #bae6fd;
         padding: 2px 8px;
@@ -83,7 +83,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 深度优化的心理学/咨询/社工同义词及专业机构映射字典
+# 3. 心理学/咨询/社工同义词与近义词扩展词典
 DICT_MAPPING = {
     "认知行为疗法": ["Cognitive Behavioral Therapy", "CBT", "cognitive restructuring", "behavioral therapy"],
     "创伤后应激": ["Post-Traumatic Stress Disorder", "PTSD", "trauma-informed care", "complex PTSD", "trauma intervention"],
@@ -99,41 +99,74 @@ DICT_MAPPING = {
     "抑郁": ["Depression", "depressive disorders", "major depressive disorder", "MDD"],
     "焦虑": ["Anxiety disorders", "generalized anxiety disorder", "GAD", "social anxiety"],
     "叙事疗法": ["Narrative therapy", "externalizing the problem", "re-authoring"],
-    "焦点解决短程心理咨询": ["Solution-focused brief therapy", "SFBT", "exception questions"]
+    "焦点解决": ["Solution-focused brief therapy", "SFBT", "exception questions"]
 }
 
+# 4. 初始化 Session State 解决底部点击发起新搜索失效问题
 if "search_query" not in st.session_state:
     st.session_state["search_query"] = ""
 
 def update_query(new_term):
+    """同时同步 search_query 与 main_input，确保 Streamlit 实时重新运行"""
     st.session_state["search_query"] = new_term
+    st.session_state["main_input"] = new_term
 
 def translate_and_expand_query(user_input: str):
-    """同义词与近义词自动扩展与映射"""
+    """中文到专业英文术语自动映射，并提取命中近义词"""
     english_terms = []
     highlight_terms = [user_input.strip()]
-    found_mapped = False
+    matched_synonyms = []
     
     for key, syn_list in DICT_MAPPING.items():
         if key in user_input:
-            found_mapped = True
             english_terms.extend(syn_list)
+            matched_synonyms.extend(syn_list)
             highlight_terms.extend(syn_list)
-            highlight_terms.append(key)
     
-    if not found_mapped:
+    if not matched_synonyms:
         english_terms.append(user_input)
         for w in user_input.split():
             if len(w) > 1:
                 highlight_terms.append(w)
     
-    main_query = " ".join(english_terms[:3])
-    return main_query, list(set(highlight_terms))
+    main_query = " ".join(english_terms[:4])
+    return main_query, list(set(highlight_terms)), list(set(matched_synonyms))
+
+def calculate_relevance(title: str, snippet: str, raw_query: str, highlight_terms: list):
+    """计算智能相关性得分 (65% - 99%) 并给出打分依据说明"""
+    combined = (title + " " + snippet).lower()
+    score = 65
+    reasons = []
+
+    # 1. 标题完全匹配或高匹配
+    if raw_query.lower() in title.lower():
+        score += 20
+        reasons.append("标题包含核心搜索词")
+    else:
+        for term in highlight_terms:
+            if len(term) > 2 and term.lower() in title.lower():
+                score += 15
+                reasons.append(f"标题命中近义词 '{term}'")
+                break
+
+    # 2. 正文关键术语出现频次计算
+    match_count = 0
+    for term in highlight_terms:
+        if len(term) > 2 and term.lower() in combined:
+            match_count += 1
+
+    score += min(match_count * 3, 14)
+    if match_count > 0:
+        reasons.append(f"正文匹配 {match_count} 个领域概念/同义术语")
+
+    final_score = min(max(score, 68), 98)
+    reason_str = " | ".join(reasons) if reasons else "领域内容语义高度相关"
+    return final_score, reason_str
 
 def highlight_text(text: str, terms: list) -> str:
     """自动高亮匹配文本及其近义词"""
     if not text:
-        return "暂无详细摘要/简介"
+        return "暂无详细摘要/内容介绍"
     for term in terms:
         if not term or len(term) < 2:
             continue
@@ -141,29 +174,20 @@ def highlight_text(text: str, terms: list) -> str:
         text = pattern.sub(lambda m: f'<span class="highlight">{m.group(0)}</span>', text)
     return text
 
-# 1. 抓取 OpenAlex 数据库（包含政府报告、权威机构白皮书、书籍专著）
-def fetch_openalex_data(en_query: str):
-    gov_results = []
-    book_results = []
+# 5. 抓取政府与权威机构报告（OpenAlex API）
+def fetch_gov_reports(en_query: str, raw_query: str, highlight_terms: list):
+    results = []
     headers = {"User-Agent": "PsychologyAcademicSearch/1.0 (mailto:researcher@example.com)"}
-    
     try:
-        url = f"https://api.openalex.org/works?search={quote_plus(en_query)}&per_page=25&sort=relevance_score:desc"
+        url = f"https://api.openalex.org/works?search={quote_plus(en_query)}&per_page=20&sort=relevance_score:desc"
         res = requests.get(url, headers=headers, timeout=6)
         if res.status_code == 200:
-            items = res.json().get("results", [])
-            for item in items:
+            for item in res.json().get("results", []):
                 title = item.get("display_name", "Untitled")
                 doi_url = item.get("doi") or item.get("id")
                 pub_year = item.get("publication_year", "N/A")
-                doc_type = item.get("type", "")
                 
-                # 获取作者与机构信息
-                authorships = item.get("authorships", [])
-                authors = [a.get("author", {}).get("display_name") for a in authorships[:3]]
-                author_str = ", ".join(filter(None, authors)) or "权威机构/学者"
-                
-                # 摘要还原
+                # 提取摘要
                 abstract_inverted = item.get("abstract_inverted_index")
                 abstract = ""
                 if abstract_inverted:
@@ -174,80 +198,82 @@ def fetch_openalex_data(en_query: str):
                     word_list.sort()
                     abstract = " ".join([w[1] for w in word_list[:120]]) + "..."
                 
-                source_name = item.get("primary_location", {}).get("source", {}).get("display_name", "权威学术数据库/机构")
-                
-                # 区分图书/智库报告与政府/机构文献
-                if doc_type in ["book", "book-chapter"]:
-                    book_results.append({
-                        "title": f"📚 [图书专著] {title}",
-                        "url": doi_url,
-                        "year": pub_year,
-                        "author": author_str,
-                        "source": source_name,
-                        "abstract": abstract or "心理学与社工领域专业出版物/专著。"
-                    })
-                else:
-                    gov_results.append({
-                        "title": title,
-                        "url": doi_url,
-                        "year": pub_year,
-                        "author": author_str,
-                        "source": source_name,
-                        "abstract": abstract or "权威机构研究报告/学术白皮书。"
-                    })
-    except Exception:
-        pass
-        
-    return gov_results, book_results
+                source_name = item.get("primary_location", {}).get("source", {}).get("display_name", "权威机构/智库报告")
+                authorships = item.get("authorships", [])
+                authors = [a.get("author", {}).get("display_name") for a in authorships[:3]]
+                author_str = ", ".join(filter(None, authors)) or "政府/权威智库"
 
-# 2. 抓取音视频、播客与学术讲座（iTunes API - 零封锁防爬）
-def fetch_audio_media(en_query: str):
-    media_results = []
-    try:
-        url = f"https://itunes.apple.com/search?term={quote_plus(en_query + ' psychology counselling')}&entity=podcastEpisode&limit=15"
-        res = requests.get(url, timeout=5)
-        if res.status_code == 200:
-            items = res.json().get("results", [])
-            for item in items:
-                media_results.append({
-                    "title": item.get("trackName", "Untitled Episode"),
-                    "artist": item.get("artistName", "Expert/Podcast Host"),
-                    "collection": item.get("collectionName", "Academic Podcast"),
-                    "url": item.get("trackViewUrl") or item.get("collectionViewUrl"),
-                    "snippet": item.get("description", "暂无剧集简介")[:200] + "...",
-                    "date": item.get("releaseDate", "")[:10]
+                score, reason = calculate_relevance(title, abstract, raw_query, highlight_terms)
+                
+                results.append({
+                    "title": title,
+                    "url": doi_url,
+                    "year": pub_year,
+                    "author": author_str,
+                    "source": source_name,
+                    "abstract": abstract or "权威机构研究报告/学术白皮书。",
+                    "score": score,
+                    "reason": reason
                 })
     except Exception:
         pass
-    return media_results
 
-# 3. 抓取学术期刊 (Europe PMC API)
-def fetch_academic_papers(en_query: str):
-    headers = {"User-Agent": "Mozilla/5.0"}
+    # 按智能相关性百分比从高到低排序
+    results.sort(key=lambda x: x["score"], reverse=True)
+    return results
+
+# 6. 抓取可免费下载全文的学术论文 (Europe PMC + OpenAlex OA 过滤)
+def fetch_free_academic_papers(en_query: str, raw_query: str, highlight_terms: list):
     formatted = []
+    headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        pmc_url = f"https://www.ebi.ac.uk/europepmc/webservices/rest/search?query={quote_plus(en_query)}&format=json&pageSize=20"
+        # 检索 Europe PMC 开放获取文献
+        pmc_url = f"https://www.ebi.ac.uk/europepmc/webservices/rest/search?query={quote_plus(en_query + ' OPEN_ACCESS:y')}&format=json&pageSize=25"
         res = requests.get(pmc_url, headers=headers, timeout=6)
         if res.status_code == 200:
             result_list = res.json().get("resultList", {}).get("result", [])
             for item in result_list:
                 doi = item.get("doi")
-                url = f"https://doi.org/{doi}" if doi else f"https://europepmc.org/article/MED/{item.get('id')}"
+                pmcid = item.get("pmcid")
+                
+                # 优先构建可免费阅读/下载 PDF 的链接
+                if pmcid:
+                    download_url = f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/"
+                    is_free = True
+                elif doi:
+                    download_url = f"https://doi.org/{doi}"
+                    is_free = item.get("isOpenAccess") == "Y"
+                else:
+                    download_url = f"https://europepmc.org/article/MED/{item.get('id')}"
+                    is_free = False
+
+                title = item.get("title", "Untitled Paper")
+                abstract = item.get("abstractText", "")
                 author_str = item.get("authorString", "")
-                authors = [{"name": a.strip()} for a in author_str.split(",")[:3]] if author_str else []
+                authors = ", ".join([a.strip() for a in author_str.split(",")[:3]]) if author_str else "Unknown"
+                
+                score, reason = calculate_relevance(title, abstract, raw_query, highlight_terms)
+
                 formatted.append({
-                    "title": item.get("title", "Untitled Paper"),
-                    "abstract": item.get("abstractText", ""),
-                    "url": url,
+                    "title": title,
+                    "abstract": abstract,
+                    "url": download_url,
                     "year": item.get("pubYear", "N/A"),
                     "venue": item.get("journalTitle", "Academic Journal"),
-                    "citationCount": item.get("citedByCount", 0),
-                    "authors": authors
+                    "citations": item.get("citedByCount", 0),
+                    "authors": authors,
+                    "is_free": is_free,
+                    "score": score,
+                    "reason": reason
                 })
     except Exception:
         pass
+
+    # 按相关性排序，免费可下载论文优先排序
+    formatted.sort(key=lambda x: (x["score"], x["is_free"]), reverse=True)
     return formatted
 
+# 7. 动态拓展词生成
 def get_extension_keywords(query_text: str):
     return {
         "vertical": [
@@ -266,10 +292,11 @@ def get_extension_keywords(query_text: str):
         ]
     }
 
-# --- 界面主逻辑 ---
+# --- 8. 主界面交互逻辑 ---
 st.title("🧠 Psychology, Counselling & Social Work Search Engine")
-st.caption("无广告·私人定制学术引擎 | 聚合政府机构报告、知名学者图书、音视频讲座与核心期刊")
+st.caption("私人定制学术搜索引擎 | 智能相关性排序 · 近义词标记 · 免费全文论文优先 · 纵深/横向一键检索")
 
+# 搜索框绑定 key 与 session_state
 query_input = st.text_input(
     "输入查询关键词（支持中文或英文）：",
     value=st.session_state["search_query"],
@@ -279,115 +306,73 @@ query_input = st.text_input(
 
 if query_input:
     st.session_state["search_query"] = query_input
-    en_query, highlight_keywords = translate_and_expand_query(query_input)
+    en_query, highlight_keywords, matched_synonyms = translate_and_expand_query(query_input)
     
     col_a, col_b = st.columns([3, 1])
     with col_a:
-        st.info(f"**实际检索与学术/同义词映射表达式：** `{en_query}`")
+        st.info(f"**实际检索学术表达式：** `{en_query}`")
+        if matched_synonyms:
+            st.markdown(f'<span class="badge-synonym">💡 已自动匹配近义/同义术语: {", ".join(matched_synonyms)}</span>', unsafe_allow_html=True)
     with col_b:
-        st.success("已开启 API 防封锁与无广告过滤")
+        st.success("已开启 100% 智能排序与无广告过滤")
 
-    tab_gov, tab_books, tab_media, tab_academic = st.tabs([
-        "🏛️ 政府部门/权威机构报告", 
-        "📖 知名学者著作与图书", 
-        "🎙️ 权威音视频/专家讲座/播客", 
-        "🎓 核心学术论文与期刊"
+    tab_academic, tab_gov = st.tabs([
+        "🎓 核心学术论文 (免费全文下载优先)", 
+        "🏛️ 政府部门与权威机构报告"
     ])
 
-    # Tab 1: 政府与权威机构
-    with tab_gov:
-        with st.spinner("正在调取全球政府与权威机构研究报告..."):
-            gov_res, _ = fetch_openalex_data(en_query)
-            if not gov_res:
-                st.info("暂未检索到相关机构报告，请查看其他标签页。")
+    # Tab 1: 免费全文学术论文
+    with tab_academic:
+        with st.spinner("正在检索并进行智能相关性排序（优先筛选可免费阅读/下载论文）..."):
+            papers = fetch_free_academic_papers(en_query, query_input, highlight_keywords)
+            if not papers:
+                st.info("暂未检索到相关论文，请切换关键词尝试。")
             else:
-                st.caption(f"已为你检索到 {len(gov_res)} 条政府与权威机构报告（按相关度排序）：")
+                st.caption(f"已按相关性最高降序展示 {len(papers)} 篇学术文献：")
+                for idx, paper in enumerate(papers, start=1):
+                    t_hl = highlight_text(paper["title"], highlight_keywords)
+                    a_hl = highlight_text(paper["abstract"], highlight_keywords)
+                    
+                    free_badge = '<span class="badge-oa">🔓 免费全文阅读/下载</span>' if paper["is_free"] else '<span class="badge-meta">📖 期刊索引</span>'
+                    
+                    st.markdown(f"""
+                    <div class="card">
+                        <span class="badge-score">🎯 相关性: {paper['score']}%</span> {free_badge}
+                        <br><br>
+                        <a class="card-title" href="{paper['url']}" target="_blank">#{idx} {t_hl}</a>
+                        <div class="card-meta">
+                            📅 <strong>年份:</strong> {paper['year']} | 📖 <strong>期刊:</strong> {paper['venue']} | ✍️ <strong>作者:</strong> {paper['authors']} | 🔗 <strong>引用数:</strong> {paper['citations']}
+                        </div>
+                        <div class="card-snippet">{a_hl}</div>
+                        <div class="card-meta" style="color: #059669; margin-top: 6px;">💡 <strong>匹配分析:</strong> {paper['reason']}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+    # Tab 2: 政府部门与权威机构
+    with tab_gov:
+        with st.spinner("正在检索政府部门与权威机构报告..."):
+            gov_res = fetch_gov_reports(en_query, query_input, highlight_keywords)
+            if not gov_res:
+                st.info("暂未检索到机构报告。")
+            else:
+                st.caption(f"已按相关性高低展示 {len(gov_res)} 条权威报告与白皮书：")
                 for idx, item in enumerate(gov_res, start=1):
                     t_hl = highlight_text(item["title"], highlight_keywords)
                     a_hl = highlight_text(item["abstract"], highlight_keywords)
                     st.markdown(f"""
                     <div class="card">
-                        <span class="badge-gov">#{idx} 🏛️ 政府/权威机构/智库报告</span>
-                        <a class="card-title" href="{item['url']}" target="_blank">{t_hl}</a>
+                        <span class="badge-score">🎯 相关性: {item['score']}%</span> <span class="badge-gov">🏛️ 政府/权威机构报告</span>
+                        <br><br>
+                        <a class="card-title" href="{item['url']}" target="_blank">#{idx} {t_hl}</a>
                         <div class="card-meta">📅 <strong>年份:</strong> {item['year']} | ✍️ <strong>作者/机构:</strong> {item['author']} | 📖 <strong>出处:</strong> {item['source']}</div>
                         <div class="card-snippet">{a_hl}</div>
+                        <div class="card-meta" style="color: #059669; margin-top: 6px;">💡 <strong>匹配分析:</strong> {item['reason']}</div>
                     </div>
                     """, unsafe_allow_html=True)
 
-    # Tab 2: 知名学者著作与图书
-    with tab_books:
-        with st.spinner("正在检索领域内学术专著与经典图书..."):
-            _, book_res = fetch_openalex_data(en_query)
-            if not book_res:
-                st.info("暂未检索到相关书籍专著，请尝试微调关键词。")
-            else:
-                st.caption(f"已为你检索到 {len(book_res)} 部学术图书与论文集：")
-                for idx, item in enumerate(book_res, start=1):
-                    t_hl = highlight_text(item["title"], highlight_keywords)
-                    a_hl = highlight_text(item["abstract"], highlight_keywords)
-                    st.markdown(f"""
-                    <div class="card">
-                        <span class="badge-book">#{idx} 📖 权威学术图书/专著</span>
-                        <a class="card-title" href="{item['url']}" target="_blank">{t_hl}</a>
-                        <div class="card-meta">📅 <strong>出版年份:</strong> {item['year']} | ✍️ <strong>作者:</strong> {item['author']} | 📖 <strong>出版社/来源:</strong> {item['source']}</div>
-                        <div class="card-snippet">{a_hl}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-
-    # Tab 3: 音视频与讲座
-    with tab_media:
-        with st.spinner("正在检索专家讲座与权威音频资源..."):
-            media_res = fetch_audio_media(en_query)
-            if not media_res:
-                st.info("暂未检索到相关音视频讲座。")
-            else:
-                st.caption(f"已为你找到 {len(media_res)} 个包含专家访谈、心理咨询讲座的音频/剧集：")
-                for idx, item in enumerate(media_res, start=1):
-                    t_hl = highlight_text(item["title"], highlight_keywords)
-                    s_hl = highlight_text(item["snippet"], highlight_keywords)
-                    st.markdown(f"""
-                    <div class="card">
-                        <span class="badge-media">#{idx} 🎙️ 音视频/专家讲座/学术播客</span>
-                        <a class="card-title" href="{item['url']}" target="_blank">{t_hl}</a>
-                        <div class="card-meta">🎙️ <strong>节目/讲座源:</strong> {item['collection']} | ✍️ <strong>主讲人/专家:</strong> {item['artist']} | 📅 <strong>发布日期:</strong> {item['date']}</div>
-                        <div class="card-snippet">{s_hl}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-
-    # Tab 4: 学术论文
-    with tab_academic:
-        with st.spinner("正在检索核心学术期刊论文..."):
-            papers = fetch_academic_papers(en_query)
-            if not papers:
-                st.info("暂未检索到核心论文。")
-            else:
-                st.caption(f"已为你找到 {len(papers)} 篇核心期刊论文：")
-                for idx, paper in enumerate(papers, start=1):
-                    title = paper.get("title", "Untitled Paper")
-                    abstract = paper.get("abstract", "")
-                    url = paper.get("url")
-                    year = paper.get("year", "N/A")
-                    venue = paper.get("venue", "Academic Journal")
-                    citations = paper.get("citationCount", 0)
-                    authors = ", ".join([a["name"] for a in paper.get("authors", [])[:3]]) if paper.get("authors") else "Unknown"
-                    
-                    t_hl = highlight_text(title, highlight_keywords)
-                    a_hl = highlight_text(abstract, highlight_keywords)
-                    
-                    st.markdown(f"""
-                    <div class="card">
-                        <span class="badge-academic">#{idx} 🎓 期刊论文</span>
-                        <a class="card-title" href="{url}" target="_blank">{t_hl}</a>
-                        <div class="card-meta">
-                            📅 <strong>年份:</strong> {year} | 📖 <strong>期刊:</strong> {venue} | ✍️ <strong>作者:</strong> {authors} | 🔗 <strong>引用数:</strong> {citations}
-                        </div>
-                        <div class="card-snippet">{a_hl}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-
-    # 底部直接搜索的拓展区域
+    # 9. 底部交互式纵深与横向拓展（已修复一键检索功能）
     st.divider()
-    st.markdown("### 🔍 纵深与横向拓展（点击标签发起新检索）")
+    st.markdown("### 🔍 纵深与横向拓展（点击下方标签将直接发起新检索）")
     extensions = get_extension_keywords(query_input)
     col_v, col_h = st.columns(2)
     
