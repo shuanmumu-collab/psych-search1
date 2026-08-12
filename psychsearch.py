@@ -1,38 +1,39 @@
 import streamlit as st
 import requests
 import re
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, unquote
+from bs4 import BeautifulSoup
 
 # 页面基础配置
 st.set_page_config(
-    page_title="心理学与社工无广告学术搜索引擎",
+    page_title="心理学、咨询与社工全能搜索引擎",
     page_icon="🧠",
     layout="wide"
 )
 
-# 样式增强：包含关键词高亮与高品质学术卡片布局
+# 样式增强
 st.markdown("""
 <style>
-    .paper-card {
+    .card {
         background-color: #ffffff;
         border: 1px solid #e2e8f0;
         border-radius: 8px;
-        padding: 20px;
-        margin-bottom: 16px;
+        padding: 18px;
+        margin-bottom: 14px;
         box-shadow: 0 1px 3px rgba(0,0,0,0.05);
     }
-    .paper-title {
+    .card-title {
         font-size: 18px;
         font-weight: 600;
         color: #1e3a8a;
         text-decoration: none;
     }
-    .paper-meta {
+    .card-meta {
         font-size: 13px;
         color: #64748b;
-        margin: 8px 0;
+        margin: 6px 0;
     }
-    .paper-abstract {
+    .card-snippet {
         font-size: 14px;
         color: #334155;
         line-height: 1.6;
@@ -54,10 +55,28 @@ st.markdown("""
         border-radius: 16px;
         font-size: 13px;
     }
+    .badge-pop {
+        background-color: #f0fdf4;
+        color: #166534;
+        border: 1px solid #bbf7d0;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 12px;
+        font-weight: 600;
+    }
+    .badge-academic {
+        background-color: #f0f9ff;
+        color: #0369a1;
+        border: 1px solid #bae6fd;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 12px;
+        font-weight: 600;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# 常见心理学/咨询/社工中英专业词汇自动映射字典
+# 心理学/社工专业词汇映射字典
 DICT_MAPPING = {
     "认知行为疗法": "Cognitive Behavioral Therapy CBT",
     "创伤后应激": "Post-Traumatic Stress Disorder PTSD trauma-informed",
@@ -72,7 +91,7 @@ DICT_MAPPING = {
 }
 
 def translate_and_expand_query(user_input: str):
-    """映射中文输入为专业英文学术检索表达式"""
+    """映射中文输入为专业英文表达式"""
     english_query = user_input
     for key, val in DICT_MAPPING.items():
         if key in user_input:
@@ -85,10 +104,9 @@ def translate_and_expand_query(user_input: str):
     return english_query, list(set(highlight_terms))
 
 def highlight_text(text: str, terms: list) -> str:
-    """在文本中自动标黄匹配的关键词"""
+    """在文本中自动标黄匹配关键词"""
     if not text:
-        return "暂无摘要 (No abstract available)"
-    
+        return "暂无简介/摘要"
     for term in terms:
         if not term or len(term) < 2:
             continue
@@ -96,8 +114,109 @@ def highlight_text(text: str, terms: list) -> str:
         text = pattern.sub(lambda m: f'<span class="highlight">{m.group(0)}</span>', text)
     return text
 
+def fetch_pop_science_web(en_query: str):
+    """抓取科普与科普网站（Psychology Today, Verywell Mind, Simply Psychology, Wikipedia等）"""
+    results = []
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    
+    # 1. 优先获取维基百科（Wikipedia）权威词条概述
+    try:
+        wiki_url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{quote_plus(en_query)}"
+        res = requests.get(wiki_url, headers=headers, timeout=4)
+        if res.status_code == 200:
+            w_data = res.json()
+            if w_data.get("type") != "disambiguation" and w_data.get("extract"):
+                results.append({
+                    "title": f"维基百科 (Wikipedia): {w_data.get('title')}",
+                    "snippet": w_data.get("extract"),
+                    "url": w_data.get("content_urls", {}).get("desktop", {}).get("page", ""),
+                    "source": "Wikipedia 权威词条"
+                })
+    except Exception:
+        pass
+
+    # 2. 获取大众科普与介绍性网页
+    try:
+        ddg_url = "https://html.duckduckgo.com/html/"
+        search_term = f"{en_query} psychology"
+        res = requests.post(ddg_url, data={"q": search_term}, headers=headers, timeout=6)
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, "html.parser")
+            for div in soup.find_all("div", class_="result"):
+                a_title = div.find("a", class_="result__a")
+                a_snippet = div.find("a", class_="result__snippet")
+                a_url = div.find("a", class_="result__url")
+                if a_title:
+                    title = a_title.text.strip()
+                    raw_link = a_title.get("href", "")
+                    actual_link = raw_link
+                    if "uddg=" in raw_link:
+                        actual_link = unquote(raw_link.split("uddg=")[1].split("&")[0])
+                    
+                    snippet = a_snippet.text.strip() if a_snippet else "暂无描述"
+                    source_domain = a_url.text.strip() if a_url else "Web Resource"
+                    
+                    # 排除纯学术库域名，保留科普网站
+                    if not any(domain in actual_link for domain in ["sciencedirect", "ncbi.nlm.nih.gov/pmc", "doi.org"]):
+                        results.append({
+                            "title": title,
+                            "snippet": snippet,
+                            "url": actual_link,
+                            "source": source_domain
+                        })
+                    if len(results) >= 12:
+                        break
+    except Exception:
+        pass
+        
+    return results
+
+def fetch_academic_papers(en_query: str):
+    """抓取学术期刊论文（Semantic Scholar + Europe PMC）"""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
+    
+    try:
+        api_url = f"https://api.semanticscholar.org/graph/v1/paper/search?query={quote_plus(en_query)}&limit=10&fields=title,abstract,url,venue,year,authors,citationCount"
+        res = requests.get(api_url, headers=headers, timeout=5)
+        if res.status_code == 200:
+            papers = res.json().get("data")
+            if papers:
+                return papers, "Semantic Scholar"
+    except Exception:
+        pass
+
+    try:
+        pmc_url = f"https://www.ebi.ac.uk/europepmc/webservices/rest/search?query={quote_plus(en_query)}&format=json&pageSize=10"
+        res = requests.get(pmc_url, headers=headers, timeout=5)
+        if res.status_code == 200:
+            result_list = res.json().get("resultList", {}).get("result", [])
+            formatted = []
+            for item in result_list:
+                doi = item.get("doi")
+                url = f"https://doi.org/{doi}" if doi else f"https://europepmc.org/article/MED/{item.get('id')}"
+                author_str = item.get("authorString", "")
+                authors = [{"name": a.strip()} for a in author_str.split(",")[:3]] if author_str else []
+                formatted.append({
+                    "title": item.get("title", "Untitled Paper"),
+                    "abstract": item.get("abstractText", ""),
+                    "url": url,
+                    "year": item.get("pubYear", "N/A"),
+                    "venue": item.get("journalTitle", "Academic Journal"),
+                    "citationCount": item.get("citedByCount", 0),
+                    "authors": authors
+                })
+            if formatted:
+                return formatted, "Europe PMC"
+    except Exception:
+        pass
+
+    return [], "None"
+
 def get_extension_keywords(query_text: str):
-    """生成纵深与横向知识拓展词"""
     return {
         "vertical": [
             f"{query_text} neurobiological mechanism",
@@ -113,115 +232,85 @@ def get_extension_keywords(query_text: str):
         ]
     }
 
-def fetch_academic_papers(en_query: str):
-    """双源学术引擎拉取（主源 Semantic Scholar + 备用源 Europe PMC）"""
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
-    
-    # 尝试主源：Semantic Scholar API
-    try:
-        api_url = f"https://api.semanticscholar.org/graph/v1/paper/search?query={quote_plus(en_query)}&limit=10&fields=title,abstract,url,venue,year,authors,citationCount"
-        res = requests.get(api_url, headers=headers, timeout=6)
-        if res.status_code == 200:
-            data = res.json()
-            papers = data.get("data")
-            if papers:
-                return papers, "Semantic Scholar Academic Database"
-    except Exception:
-        pass
-
-    # 尝试备用源：Europe PMC Academic API
-    try:
-        pmc_url = f"https://www.ebi.ac.uk/europepmc/webservices/rest/search?query={quote_plus(en_query)}&format=json&pageSize=10"
-        res = requests.get(pmc_url, headers=headers, timeout=6)
-        if res.status_code == 200:
-            data = res.json()
-            result_list = data.get("resultList", {}).get("result", [])
-            formatted_papers = []
-            for item in result_list:
-                doi = item.get("doi")
-                url = f"https://doi.org/{doi}" if doi else f"https://europepmc.org/article/MED/{item.get('id')}"
-                author_str = item.get("authorString", "")
-                authors = [{"name": a.strip()} for a in author_str.split(",")[:3]] if author_str else []
-                
-                formatted_papers.append({
-                    "title": item.get("title", "Untitled Paper"),
-                    "abstract": item.get("abstractText", ""),
-                    "url": url,
-                    "year": item.get("pubYear", "N/A"),
-                    "venue": item.get("journalTitle", "Academic Journal"),
-                    "citationCount": item.get("citedByCount", 0),
-                    "authors": authors
-                })
-            if formatted_papers:
-                return formatted_papers, "Europe PMC Academic Database (Backup Engine)"
-    except Exception:
-        pass
-
-    return [], "None"
-
-# --- 界面主逻辑 ---
+# --- 主界面 UI ---
 st.title("🧠 Psychology, Counselling & Social Work Search")
-st.caption("无广告学术专用搜索引擎 · 支持中文自动映射专业英文文献 · 自动高亮与知识拓展")
+st.caption("综合搜索引擎 · 包含科普网站/知识介绍 + 学术论文 · 自动中英映射与高亮标黄")
 
-# 搜索框
-query_input = st.text_input("输入查询关键词（支持中文或英文）：", placeholder="例如：创伤后应激 认知重塑 或 Attachment Theory in counselling")
+query_input = st.text_input("输入查询关键词（支持中文或英文）：", placeholder="例如：依恋理论、认知行为疗法、Attachment Theory")
 
 if query_input:
     en_query, highlight_keywords = translate_and_expand_query(query_input)
     
     col_a, col_b = st.columns([3, 1])
     with col_a:
-        st.info(f"**实际检索学术表达式：** `{en_query}`")
+        st.info(f"**实际检索学术/英文表达式：** `{en_query}`")
     with col_b:
-        st.success("已开启 100% 无广告过滤")
+        st.success("已开启无广告学术与科普过滤")
 
-    with st.spinner("正在检索学术数据库..."):
-        papers, source_engine = fetch_academic_papers(en_query)
-        
-        if not papers:
-            st.warning("未找到匹配文献，请尝试更换关键词。")
-        else:
-            st.caption(f"数据来源：`{source_engine}` | 共匹配 {len(papers)} 篇学术文献")
-            st.markdown("---")
-            
-            for paper in papers:
-                title = paper.get("title", "Untitled Paper")
-                abstract = paper.get("abstract", "")
-                url = paper.get("url") or f"https://www.google.com/search?q={quote_plus(title)}"
-                year = paper.get("year", "N/A")
-                venue = paper.get("venue", "Academic Journal")
-                citations = paper.get("citationCount", 0)
-                authors = ", ".join([a["name"] for a in paper.get("authors", [])[:3]]) if paper.get("authors") else "Unknown"
-                
-                # 高亮处理
-                highlighted_title = highlight_text(title, highlight_keywords)
-                highlighted_abstract = highlight_text(abstract, highlight_keywords)
-                
-                # 卡片渲染
-                st.markdown(f"""
-                <div class="paper-card">
-                    <a class="paper-title" href="{url}" target="_blank">{highlighted_title}</a>
-                    <div class="paper-meta">
-                        📅 <strong>年份:</strong> {year} | 📖 <strong>期刊/出处:</strong> {venue} | ✍️ <strong>作者:</strong> {authors} | 🔗 <strong>被引次数:</strong> {citations}
+    # 分标签页展示科普与学术结果
+    tab_pop, tab_academic = st.tabs(["📖 科普/知识介绍网站 (Psychology Today / 维基 / 大众导读)", "🎓 专业学术论文与期刊 (Semantic Scholar / PubMed)"])
+
+    # Tab 1: 科普网页
+    with tab_pop:
+        with st.spinner("正在检索科普与知识介绍网站..."):
+            pop_results = fetch_pop_science_web(en_query)
+            if not pop_results:
+                st.warning("暂未抓取到相关科普网页，请尝试调整关键词或查看“学术论文”标签页。")
+            else:
+                st.caption(f"已为你找到 {len(pop_results)} 条科普与知识介绍网页：")
+                for item in pop_results:
+                    title_hl = highlight_text(item["title"], highlight_keywords)
+                    snippet_hl = highlight_text(item["snippet"], highlight_keywords)
+                    st.markdown(f"""
+                    <div class="card">
+                        <span class="badge-pop">🌐 科普 / 大众介绍</span>
+                        <a class="card-title" href="{item['url']}" target="_blank">{title_hl}</a>
+                        <div class="card-meta">🔗 <strong>来源网站:</strong> {item['source']}</div>
+                        <div class="card-snippet">{snippet_hl}</div>
                     </div>
-                    <div class="paper-abstract">{highlighted_abstract}</div>
-                </div>
-                """, unsafe_allow_html=True)
-            
-            # --- 底部纵深与横向拓展 ---
-            st.divider()
-            st.markdown("### 🔍 知识拓展与横向/纵深延伸")
-            extensions = get_extension_keywords(query_input)
-            
-            col_v, col_h = st.columns(2)
-            with col_v:
-                st.markdown("**📌 纵深探索（作用机制 / 实证研究 / 评估工具）：**")
-                for ext in extensions["vertical"]:
-                    st.markdown(f'<span class="ext-badge">🔍 {ext}</span>', unsafe_allow_html=True)
-            
-            with col_h:
-                st.markdown("**🌐 横向拓展（社工介入 / 交叉学科 / 流派结合）：**")
-                for ext in extensions["horizontal"]:
-                    st.markdown(f'<span class="ext-badge">🌐 {ext}</span>', unsafe_allow_html=True)
+                    """, unsafe_allow_html=True)
+
+    # Tab 2: 学术论文
+    with tab_academic:
+        with st.spinner("正在检索学术数据库..."):
+            papers, source_engine = fetch_academic_papers(en_query)
+            if not papers:
+                st.warning("未找到匹配文献，请尝试更换关键词。")
+            else:
+                st.caption(f"数据来源：`{source_engine}` | 共匹配 {len(papers)} 篇学术文献")
+                for paper in papers:
+                    title = paper.get("title", "Untitled Paper")
+                    abstract = paper.get("abstract", "")
+                    url = paper.get("url") or f"https://www.google.com/search?q={quote_plus(title)}"
+                    year = paper.get("year", "N/A")
+                    venue = paper.get("venue", "Academic Journal")
+                    citations = paper.get("citationCount", 0)
+                    authors = ", ".join([a["name"] for a in paper.get("authors", [])[:3]]) if paper.get("authors") else "Unknown"
+                    
+                    title_hl = highlight_text(title, highlight_keywords)
+                    abstract_hl = highlight_text(abstract, highlight_keywords)
+                    
+                    st.markdown(f"""
+                    <div class="card">
+                        <span class="badge-academic">🎓 期刊论文</span>
+                        <a class="card-title" href="{url}" target="_blank">{title_hl}</a>
+                        <div class="card-meta">
+                            📅 <strong>年份:</strong> {year} | 📖 <strong>期刊:</strong> {venue} | ✍️ <strong>作者:</strong> {authors} | 🔗 <strong>引用数:</strong> {citations}
+                        </div>
+                        <div class="card-snippet">{abstract_hl}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+    # 底部知识拓展
+    st.divider()
+    st.markdown("### 🔍 知识拓展与横向/纵深延伸")
+    extensions = get_extension_keywords(query_input)
+    col_v, col_h = st.columns(2)
+    with col_v:
+        st.markdown("**📌 纵深探索（作用机制 / 实证研究 / 评估工具）：**")
+        for ext in extensions["vertical"]:
+            st.markdown(f'<span class="ext-badge">🔍 {ext}</span>', unsafe_allow_html=True)
+    with col_h:
+        st.markdown("**🌐 横向拓展（社工介入 / 交叉学科 / 流派结合）：**")
+        for ext in extensions["horizontal"]:
+            st.markdown(f'<span class="ext-badge">🌐 {ext}</span>', unsafe_allow_html=True)
