@@ -11,20 +11,20 @@ st.set_page_config(
     layout="wide"
 )
 
-# 2. 自定义 CSS 样式（包含新标签页链接按钮样式）
+# 2. 自定义 CSS 样式（优化卡片结构、突出核心内容摘要与参考文献标识）
 st.markdown("""
 <style>
     .card {
         background-color: #ffffff;
-        border: 1px solid #e2e8f0;
-        border-radius: 8px;
-        padding: 18px;
-        margin-bottom: 14px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        border: 1px solid #cbd5e1;
+        border-radius: 10px;
+        padding: 20px;
+        margin-bottom: 16px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.04);
     }
     .card-title {
-        font-size: 18px;
-        font-weight: 600;
+        font-size: 19px;
+        font-weight: 700;
         color: #1e3a8a;
         text-decoration: none;
     }
@@ -33,9 +33,14 @@ st.markdown("""
         color: #64748b;
         margin: 6px 0;
     }
-    .card-snippet {
+    .summary-box {
+        background-color: #f8fafc;
+        border-left: 4px solid #3b82f6;
+        padding: 12px;
+        margin: 10px 0;
+        border-radius: 0 6px 6px 0;
         font-size: 14px;
-        color: #334155;
+        color: #1e293b;
         line-height: 1.6;
     }
     .highlight {
@@ -49,6 +54,15 @@ st.markdown("""
         background-color: #fef3c7;
         color: #b45309;
         border: 1px solid #fde68a;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 12px;
+        font-weight: 600;
+    }
+    .badge-ref {
+        background-color: #ecfdf5;
+        color: #047857;
+        border: 1px solid #a7f3d0;
         padding: 2px 8px;
         border-radius: 12px;
         font-size: 12px;
@@ -120,7 +134,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 3. 支持 URL 搜索参数（方便在新标签页打开搜索结果）
+# 3. 读取 URL 搜索参数（方便在新标签页直接发起检索）
 query_params = st.query_params
 url_query = query_params.get("q", "")
 
@@ -129,7 +143,7 @@ if "search_query" not in st.session_state:
 elif url_query and st.session_state["search_query"] != url_query:
     st.session_state["search_query"] = url_query
 
-# 4. 专业中英及同义词字典
+# 4. 专业中英及同义词映射表
 DICT_MAPPING = {
     "认知行为疗法": ["Cognitive Behavioral Therapy", "CBT", "cognitive restructuring", "behavioral therapy"],
     "创伤后应激": ["Post-Traumatic Stress Disorder", "PTSD", "trauma-informed care", "complex PTSD", "trauma intervention"],
@@ -147,6 +161,12 @@ DICT_MAPPING = {
     "叙事疗法": ["Narrative therapy", "externalizing the problem", "re-authoring"],
     "焦点解决": ["Solution-focused brief therapy", "SFBT", "exception questions"]
 }
+
+# 商业推销/诱导转化黑名单关键词（排除纯广告软文与卖课机构）
+PROMOTIONAL_FILTER_KEYWORDS = [
+    "book appointment now", "buy our course", "pricing plans", "discount code",
+    "contact our sales", "free consultation call", "our services fees", "order now"
+]
 
 def translate_and_expand_query(user_input: str):
     english_terms = []
@@ -168,26 +188,26 @@ def translate_and_expand_query(user_input: str):
     main_query = " ".join(english_terms[:4])
     return main_query, list(set(highlight_terms)), list(set(matched_synonyms))
 
-def calculate_scientific_relevance(title: str, text: str, raw_query: str, highlight_terms: list, is_open_access=False, source_type="general"):
-    """科学多维度匹配度计算模型"""
+def calculate_scientific_relevance(title: str, text: str, raw_query: str, highlight_terms: list, has_references=False, source_type="general"):
+    """科学相关性打分机制"""
     title_lower = title.lower()
     text_lower = (text or "").lower()
     raw_lower = raw_query.lower()
     
-    score = 50  # 基础分（只要包含关键词即进入计算）
+    score = 50
     reasons = []
 
-    # 1. 标题权重判定 (最高 +25%)
+    # 1. 标题相关度
     if raw_lower in title_lower:
         score += 25
-        reasons.append("标题精确包含检索词 (+25%)")
+        reasons.append("标题精确包含核心词 (+25%)")
     else:
         title_term_hits = [t for t in highlight_terms if len(t) > 2 and t.lower() in title_lower]
         if title_term_hits:
             score += 18
-            reasons.append(f"标题命中相关术语 '{title_term_hits[0]}' (+18%)")
+            reasons.append(f"标题命中近义词 '{title_term_hits[0]}' (+18%)")
 
-    # 2. 摘要/正文关键词与近义词密度判定 (最高 +16%)
+    # 2. 正文词汇密度
     text_hits = 0
     for term in highlight_terms:
         if len(term) > 2:
@@ -196,25 +216,20 @@ def calculate_scientific_relevance(title: str, text: str, raw_query: str, highli
     if text_hits > 0:
         hit_score = min(text_hits * 4, 16)
         score += hit_score
-        reasons.append(f"摘要/内容出现 {text_hits} 次关键词/近义词 (+{hit_score}%)")
+        reasons.append(f"正文出现 {text_hits} 次关键词/近义词 (+{hit_score}%)")
 
-    # 3. 免费全文/开放获取加分 (+5%)
-    if is_open_access:
+    # 3. 是否有参考文献/学术引用支持 (+5%)
+    if has_references or source_type in ["academic", "gov", "book"]:
         score += 5
-        reasons.append("支持免费全文阅读 (+5%)")
-        
-    # 4. 权威机构/百科来源加分 (+4%)
-    if source_type in ["gov", "wiki", "book"]:
-        score += 4
-        reasons.append("来源于权威学术/公共数据库 (+4%)")
+        reasons.append("附带学术参考文献/权威引用依据 (+5%)")
 
     final_score = min(max(score, 60), 99)
-    reason_str = " | ".join(reasons) if reasons else "领域内容相关"
+    reason_str = " | ".join(reasons) if reasons else "内容语义匹配"
     return final_score, reason_str
 
 def highlight_text(text: str, terms: list) -> str:
     if not text:
-        return "暂无详细摘要/内容介绍"
+        return "暂无详细内容介绍。"
     for term in terms:
         if not term or len(term) < 2:
             continue
@@ -222,9 +237,21 @@ def highlight_text(text: str, terms: list) -> str:
         text = pattern.sub(lambda m: f'<span class="highlight">{m.group(0)}</span>', text)
     return text
 
-# --- 数据抓取模块（海量 50+ 结果） ---
+def is_promotional_sales_page(text: str) -> bool:
+    """过滤软文/产品推销页，允许有弹窗广告但有学术 References 的科普文章"""
+    text_lower = text.lower()
+    sales_hit_count = sum(1 for kw in PROMOTIONAL_FILTER_KEYWORDS if kw in text_lower)
+    return sales_hit_count >= 2
 
-# 1. 权威百科与科普网站 (50+ 结果)
+def has_reference_section(text: str) -> bool:
+    """检测文章中是否包含参考文献/引用特征"""
+    text_lower = text.lower()
+    ref_indicators = ["references", "bibliography", "works cited", "citations", "doi:", "further reading", "参考文献"]
+    return any(indicator in text_lower for indicator in ref_indicators)
+
+# --- 抓取与搜寻模块 ---
+
+# 1. 科普与知识介绍网站（抓取 50+，放宽广告拦截，严格过滤商业推销）
 def fetch_pop_and_wiki(en_query: str, raw_query: str, highlight_terms: list):
     results = []
     seen_urls = set()
@@ -241,22 +268,23 @@ def fetch_pop_and_wiki(en_query: str, raw_query: str, highlight_terms: list):
                 page_url = f"https://en.wikipedia.org/wiki/{quote_plus(p_title)}"
                 if page_url not in seen_urls:
                     seen_urls.add(page_url)
-                    score, reason = calculate_scientific_relevance(p_title, snippet, raw_query, highlight_terms, source_type="wiki")
+                    score, reason = calculate_scientific_relevance(p_title, snippet, raw_query, highlight_terms, has_references=True, source_type="wiki")
                     results.append({
                         "title": f"Wikipedia: {p_title}",
                         "snippet": snippet,
                         "url": page_url,
                         "source": "Wikipedia 维基百科",
+                        "has_ref": True,
                         "score": score,
                         "reason": reason
                     })
     except Exception:
         pass
 
-    # 大众科普与知识导读网站 (目标 40+ 条)
+    # 大众科普与知识库网页 (目标 40+ 条)
     try:
         ddg_url = "https://html.duckduckgo.com/html/"
-        res = requests.post(ddg_url, data={"q": f"{en_query} psychology OR counselling OR mental health"}, headers=headers, timeout=8)
+        res = requests.post(ddg_url, data={"q": f"{en_query} psychology OR counselling references"}, headers=headers, timeout=8)
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, "html.parser")
             for div in soup.find_all("div", class_="result"):
@@ -274,13 +302,20 @@ def fetch_pop_and_wiki(en_query: str, raw_query: str, highlight_terms: list):
 
                     snippet = a_snippet.text.strip() if a_snippet else "暂无描述"
                     source_domain = a_url.text.strip() if a_url else "Web Resource"
+
+                    # 过滤纯推销广告，接受有References的科普网
+                    if is_promotional_sales_page(title + " " + snippet):
+                        continue
+
+                    has_ref = has_reference_section(title + " " + snippet) or any(k in actual_link for k in ["org", "edu", "apa", "ncbi"])
+                    score, reason = calculate_scientific_relevance(title, snippet, raw_query, highlight_terms, has_references=has_ref)
                     
-                    score, reason = calculate_scientific_relevance(title, snippet, raw_query, highlight_terms)
                     results.append({
                         "title": title,
                         "snippet": snippet,
                         "url": actual_link,
                         "source": source_domain,
+                        "has_ref": has_ref,
                         "score": score,
                         "reason": reason
                     })
@@ -289,10 +324,10 @@ def fetch_pop_and_wiki(en_query: str, raw_query: str, highlight_terms: list):
     except Exception:
         pass
 
-    results.sort(key=lambda x: x["score"], reverse=True)
+    results.sort(key=lambda x: (x["score"], x["has_ref"]), reverse=True)
     return results
 
-# 2. 政府报告与权威图书 (各 50+ 结果)
+# 2. 政府与智库报告 + 学术图书 (50+ 结果)
 def fetch_openalex_gov_and_books(en_query: str, raw_query: str, highlight_terms: list):
     gov_results = []
     book_results = []
@@ -323,7 +358,7 @@ def fetch_openalex_gov_and_books(en_query: str, raw_query: str, highlight_terms:
                 authors = [a.get("author", {}).get("display_name") for a in authorships[:3]]
                 author_str = ", ".join(filter(None, authors)) or "权威机构/学者"
 
-                score, reason = calculate_scientific_relevance(title, abstract, raw_query, highlight_terms, source_type="gov")
+                score, reason = calculate_scientific_relevance(title, abstract, raw_query, highlight_terms, has_references=True, source_type="gov")
 
                 card_data = {
                     "title": title,
@@ -331,7 +366,8 @@ def fetch_openalex_gov_and_books(en_query: str, raw_query: str, highlight_terms:
                     "year": pub_year,
                     "author": author_str,
                     "source": source_name,
-                    "abstract": abstract or "包含核心概念的权威学术文献/报告。",
+                    "abstract": abstract or "包含核心概念的权威研究报告/专著内容概述。",
+                    "has_ref": True,
                     "score": score,
                     "reason": reason
                 }
@@ -347,7 +383,7 @@ def fetch_openalex_gov_and_books(en_query: str, raw_query: str, highlight_terms:
     book_results.sort(key=lambda x: x["score"], reverse=True)
     return gov_results, book_results
 
-# 3. 音视频讲座与播客 (30+ 结果)
+# 3. 音视频讲座与学术播客 (30+ 结果)
 def fetch_audio_media(en_query: str, raw_query: str, highlight_terms: list):
     media_results = []
     try:
@@ -356,7 +392,7 @@ def fetch_audio_media(en_query: str, raw_query: str, highlight_terms: list):
         if res.status_code == 200:
             for item in res.json().get("results", []):
                 title = item.get("trackName", "Untitled Episode")
-                snippet = item.get("description", "暂无剧集简介")[:200] + "..."
+                snippet = item.get("description", "暂无剧集简介")[:220] + "..."
                 score, reason = calculate_scientific_relevance(title, snippet, raw_query, highlight_terms)
                 
                 media_results.append({
@@ -374,7 +410,7 @@ def fetch_audio_media(en_query: str, raw_query: str, highlight_terms: list):
     media_results.sort(key=lambda x: x["score"], reverse=True)
     return media_results
 
-# 4. 免费核心学术论文 (50+ 结果)
+# 4. 核心学术论文 (50+ 结果，免费全文下载优先)
 def fetch_academic_papers(en_query: str, raw_query: str, highlight_terms: list):
     formatted = []
     headers = {"User-Agent": "Mozilla/5.0"}
@@ -401,7 +437,7 @@ def fetch_academic_papers(en_query: str, raw_query: str, highlight_terms: list):
                 author_str = item.get("authorString", "")
                 authors = ", ".join([a.strip() for a in author_str.split(",")[:3]]) if author_str else "Unknown"
                 
-                score, reason = calculate_scientific_relevance(title, abstract, raw_query, highlight_terms, is_open_access=is_free)
+                score, reason = calculate_scientific_relevance(title, abstract, raw_query, highlight_terms, has_references=True, source_type="academic")
 
                 formatted.append({
                     "title": title,
@@ -412,6 +448,7 @@ def fetch_academic_papers(en_query: str, raw_query: str, highlight_terms: list):
                     "citations": item.get("citedByCount", 0),
                     "authors": authors,
                     "is_free": is_free,
+                    "has_ref": True,
                     "score": score,
                     "reason": reason
                 })
@@ -441,9 +478,8 @@ def get_extension_keywords(query_text: str):
 
 # --- 界面主逻辑 ---
 st.title("🧠 Psychology, Counselling & Social Work Search Engine")
-st.caption("私人学术搜索引擎 | 5大全维知识分类 · 海量50+展示 · 科学相关度评分 · 新标签页拓展")
+st.caption("私人学术搜索引擎 | 5大全维分类 · 每项附带简要总结 · 允许含弹窗广告但有References的科普网 · 新标签页拓展")
 
-# 搜索框
 query_input = st.text_input(
     "输入查询关键词（支持中文或英文）：",
     value=st.session_state["search_query"],
@@ -461,9 +497,8 @@ if query_input:
         if matched_synonyms:
             st.markdown(f'💡 **自动匹配近义/同义术语:** `{", ".join(matched_synonyms)}`')
     with col_b:
-        st.success("已开启无广告与全域宽泛匹配")
+        st.success("已开启无商品推销过滤与全域抓取")
 
-    # 还原并扩展为完整的 5 大分类 Tabs
     tab_pop, tab_gov, tab_books, tab_media, tab_academic = st.tabs([
         "📖 权威百科/科普/知识介绍", 
         "🏛️ 政府部门/智库/权威报告", 
@@ -472,31 +507,33 @@ if query_input:
         "🎓 核心学术论文 (免费全文优先)"
     ])
 
-    # Tab 1: 百科与科普知识网站
+    # Tab 1: 科普与知识介绍网站
     with tab_pop:
-        with st.spinner("正在检索权威百科与科普资源 (至多 50+ 条)..."):
+        with st.spinner("正在检索科普与知识网站 (至多 50+ 条)..."):
             pop_res = fetch_pop_and_wiki(en_query, query_input, highlight_keywords)
             if not pop_res:
                 st.info("暂未检索到科普网页，请查看其他标签页。")
             else:
-                st.caption(f"已为你展示按匹配度排序的 {len(pop_res)} 条百科与科普知识：")
+                st.caption(f"已为你展示按匹配度排序的 {len(pop_res)} 条科普与知识资源：")
                 for idx, item in enumerate(pop_res, start=1):
                     t_hl = highlight_text(item["title"], highlight_keywords)
                     s_hl = highlight_text(item["snippet"], highlight_keywords)
+                    ref_badge = '<span class="badge-ref">📚 附带参考文献/学术引用</span>' if item["has_ref"] else ''
+                    
                     st.markdown(f"""
                     <div class="card">
-                        <span class="badge-score">🎯 相关度: {item['score']}%</span> <span class="badge-pop">🌐 百科 / 科普导读</span>
+                        <span class="badge-score">🎯 相关度: {item['score']}%</span> <span class="badge-pop">🌐 科普 / 知识介绍</span> {ref_badge}
                         <br><br>
                         <a class="card-title" href="{item['url']}" target="_blank">#{idx} {t_hl}</a>
-                        <div class="card-meta">🔗 <strong>来源:</strong> {item['source']}</div>
-                        <div class="card-snippet">{s_hl}</div>
-                        <div class="card-meta" style="color: #059669; margin-top: 6px;">💡 <strong>匹配分析:</strong> {item['reason']}</div>
+                        <div class="card-meta">🔗 <strong>来源网站:</strong> {item['source']}</div>
+                        <div class="summary-box">📝 <strong>内容简要总结：</strong> {s_hl}</div>
+                        <div class="card-meta" style="color: #059669;">💡 <strong>匹配分析理由:</strong> {item['reason']}</div>
                     </div>
                     """, unsafe_allow_html=True)
 
     # Tab 2: 政府与权威机构报告
     with tab_gov:
-        with st.spinner("正在检索政府与智库机构研究报告 (至多 50+ 条)..."):
+        with st.spinner("正在检索政府与智库机构报告 (至多 50+ 条)..."):
             gov_res, _ = fetch_openalex_gov_and_books(en_query, query_input, highlight_keywords)
             if not gov_res:
                 st.info("暂未检索到机构报告。")
@@ -507,18 +544,18 @@ if query_input:
                     a_hl = highlight_text(item["abstract"], highlight_keywords)
                     st.markdown(f"""
                     <div class="card">
-                        <span class="badge-score">🎯 相关度: {item['score']}%</span> <span class="badge-gov">🏛️ 政府/智库报告</span>
+                        <span class="badge-score">🎯 相关度: {item['score']}%</span> <span class="badge-gov">🏛️ 政府/智库报告</span> <span class="badge-ref">📚 官方参考文献</span>
                         <br><br>
                         <a class="card-title" href="{item['url']}" target="_blank">#{idx} {t_hl}</a>
                         <div class="card-meta">📅 <strong>年份:</strong> {item['year']} | ✍️ <strong>作者/机构:</strong> {item['author']} | 📖 <strong>出处:</strong> {item['source']}</div>
-                        <div class="card-snippet">{a_hl}</div>
-                        <div class="card-meta" style="color: #059669; margin-top: 6px;">💡 <strong>匹配分析:</strong> {item['reason']}</div>
+                        <div class="summary-box">📝 <strong>报告核心摘要总结：</strong> {a_hl}</div>
+                        <div class="card-meta" style="color: #059669;">💡 <strong>匹配分析理由:</strong> {item['reason']}</div>
                     </div>
                     """, unsafe_allow_html=True)
 
     # Tab 3: 学者著作与学术图书
     with tab_books:
-        with st.spinner("正在检索学术图书与专业专著 (至多 50+ 条)..."):
+        with st.spinner("正在检索学术专著与专业图书 (至多 50+ 条)..."):
             _, book_res = fetch_openalex_gov_and_books(en_query, query_input, highlight_keywords)
             if not book_res:
                 st.info("暂未检索到书籍专著。")
@@ -529,12 +566,12 @@ if query_input:
                     a_hl = highlight_text(item["abstract"], highlight_keywords)
                     st.markdown(f"""
                     <div class="card">
-                        <span class="badge-score">🎯 相关度: {item['score']}%</span> <span class="badge-book">📚 学术专著/图书</span>
+                        <span class="badge-score">🎯 相关度: {item['score']}%</span> <span class="badge-book">📚 学术专著/图书</span> <span class="badge-ref">📚 权威书目引用</span>
                         <br><br>
                         <a class="card-title" href="{item['url']}" target="_blank">#{idx} {t_hl}</a>
                         <div class="card-meta">📅 <strong>年份:</strong> {item['year']} | ✍️ <strong>作者:</strong> {item['author']} | 📖 <strong>出版方:</strong> {item['source']}</div>
-                        <div class="card-snippet">{a_hl}</div>
-                        <div class="card-meta" style="color: #059669; margin-top: 6px;">💡 <strong>匹配分析:</strong> {item['reason']}</div>
+                        <div class="summary-box">📝 <strong>图书核心内容总结：</strong> {a_hl}</div>
+                        <div class="card-meta" style="color: #059669;">💡 <strong>匹配分析理由:</strong> {item['reason']}</div>
                     </div>
                     """, unsafe_allow_html=True)
 
@@ -555,8 +592,8 @@ if query_input:
                         <br><br>
                         <a class="card-title" href="{item['url']}" target="_blank">#{idx} {t_hl}</a>
                         <div class="card-meta">🎙️ <strong>节目/讲座源:</strong> {item['collection']} | ✍️ <strong>主讲人:</strong> {item['artist']} | 📅 <strong>日期:</strong> {item['date']}</div>
-                        <div class="card-snippet">{s_hl}</div>
-                        <div class="card-meta" style="color: #059669; margin-top: 6px;">💡 <strong>匹配分析:</strong> {item['reason']}</div>
+                        <div class="summary-box">📝 <strong>讲座/音视频剧集简要总结：</strong> {s_hl}</div>
+                        <div class="card-meta" style="color: #059669;">💡 <strong>匹配分析理由:</strong> {item['reason']}</div>
                     </div>
                     """, unsafe_allow_html=True)
 
@@ -575,18 +612,18 @@ if query_input:
                     
                     st.markdown(f"""
                     <div class="card">
-                        <span class="badge-score">🎯 相关度: {paper['score']}%</span> {free_badge}
+                        <span class="badge-score">🎯 相关度: {paper['score']}%</span> {free_badge} <span class="badge-ref">📚 标准学术文献(含References)</span>
                         <br><br>
                         <a class="card-title" href="{paper['url']}" target="_blank">#{idx} 🎓 {t_hl}</a>
                         <div class="card-meta">
                             📅 <strong>年份:</strong> {paper['year']} | 📖 <strong>期刊:</strong> {paper['venue']} | ✍️ <strong>作者:</strong> {paper['authors']} | 🔗 <strong>引用数:</strong> {paper['citations']}
                         </div>
-                        <div class="card-snippet">{a_hl}</div>
-                        <div class="card-meta" style="color: #059669; margin-top: 6px;">💡 <strong>匹配分析:</strong> {paper['reason']}</div>
+                        <div class="summary-box">📝 <strong>论文核心摘要总结：</strong> {a_hl}</div>
+                        <div class="card-meta" style="color: #059669;">💡 <strong>匹配分析理由:</strong> {paper['reason']}</div>
                     </div>
                     """, unsafe_allow_html=True)
 
-    # 底部新标签页拓展区域（在新标签页打开 `target="_blank"`）
+    # 底部新标签页拓展区域 (`target="_blank"`)
     st.divider()
     st.markdown("### 🔍 纵深与横向拓展（点击将在浏览器新标签页发起搜索）")
     extensions = get_extension_keywords(query_input)
